@@ -1,4 +1,5 @@
-use Test::More qw(no_plan);
+
+use Test::More tests => 9;
 BEGIN { use_ok('Config::ApacheFormat'); }
 
 my $config = Config::ApacheFormat->new(valid_directives => [ 'foo' ]);
@@ -9,7 +10,7 @@ like($@, qr/not a valid directive/);
 
 
 $config = Config::ApacheFormat->new(valid_directives => 
-                                    [ qw(foo biff bopbop bool) ]);
+                                    [ qw(foo BiFf bopbop bool) ]);
 
 $config->read("t/basic.conf");
 is($config->get('foo'), "bar");

@@ -2,7 +2,7 @@ package Config::ApacheFormat;
 use 5.006001;
 use strict;
 use warnings;
-our $VERSION = '1.1';
+our $VERSION = '1.2';
 
 =head1 NAME
 
@@ -87,43 +87,22 @@ And block notation:
  URLs. They can also be nested, allowing for very fine grained
  configuration.
 
-=head1 RATIONALE
-
-There are at least two other modules on CPAN that perform a similar
-function to this one, L<Apache::ConfigFile|Apache::ConfigFile> and
-L<Apache::ConfigParser|Apache::ConfigParser>.  Although both are close
-to what I need, neither is totally satisfactory.
-
-Apache::ConfigFile suffers from a complete lack of tests and a rather
-clumsy API.  Also, it doesn't support quoted strings correctly.
-
-Apache::ConfigParser comes closer to my needs, but contains code
-specific to parsing actual Apache configuration files.  As such it is
-unsuitable to parsing an application configuration file in Apache
-format.  Unlike Apache::ConfigFile, Apache::ConfigParser lacks support
-for Include.
-
-Additionally, neither module supports directive inheritance within
-blocks.  As this is the main benefit of Apache's block syntax I
-decided I couldn't live without it.  
-
-In general, I see no problem with reinventing the wheel as long as
-you're sure your version will really be better.  I believe this is, at
-least for my purposes.
+This module will parse actual Apache configuration files, but you will need to set some options to non-default values.  See L<"Parsing a Real Apache Config File">.
 
 =head1 METHODS
 
 =item $config = Config::ApacheFormat->new(opt => "value")
 
-This method parses a config file and returns an object that may be
-used to access the data contained within.  The object supports the
-following attributes, all of which may be set through new():
+This method creates an object that can then be used to read configuration
+files. It does not actually read any files; for that, use the C<read()>
+method below. The object supports the following attributes, all of which
+may be set through C<new()>:
 
 =over 4
 
 =item inheritance_support
 
-Set this to 0 to turn off the inheritance feature, Block inheritance
+Set this to 0 to turn off the inheritance feature. Block inheritance
 means that variables declared outside a block are available from
 inside the block unless overriden.  Defaults to 1.
 
@@ -131,9 +110,11 @@ inside the block unless overriden.  Defaults to 1.
 
 When this is set to 1, the directive "Include" will be treated
 specially by the parser.  It will cause the value to be treated as a
-filename and that filename will be read in.  This matches Apache's
-behavior and allows users to break up configuration files into
-multiple, possibly shared, pieces.  Defaults to 1.
+filename and that filename will be read in.  If you use "Include"
+with a directory, every file in that directory will be included.
+This matches Apache's behavior and allows users to break up 
+configuration files into multiple, possibly shared, pieces.  
+Defaults to 1.
 
 =item autoload_support
 
@@ -151,7 +132,75 @@ Defaults to 0.
 =item case_sensitive
 
 Set this to 1 to preserve the case of directive names.  Otherwise, all
-names will be lc()ed and matched case-insensitively.  Defaults to 0.
+names will be C<lc()>ed and matched case-insensitively.  Defaults to 0.
+
+=item fix_booleans
+
+If set to 1, then during parsing, the strings "Yes", "On", and "True"
+will be converted to 1, and the strings "No", "Off", and "False" will
+be converted to 0. This allows you to more easily use C<get()> in 
+conditional statements.
+
+For example:
+
+  # httpd.conf
+  UseCanonicalName  On
+
+Then in Perl:
+
+  $config = Config::ApacheFormat->new(fix_booleans => 1);
+  $config->read("httpd.conf");
+
+  if ($config->get("UseCanonicalName")) {
+      # this will get executed if set to Yes/On/True
+  }
+
+This option defaults to 0.
+
+=item expand_vars
+
+If set, then you can use variable expansion in your config file by 
+prefixing directives with a C<$>. Hopefully this seems logical to you:
+
+  Website     http://my.own.dom
+  JScript     $Website/js
+  Images      $Website/images
+
+Undefined variables in your config file will result in an error. To
+use a literal C<$>, simply prefix it with a C<\> (backslash). Like
+in Perl, you can use brackets to delimit the variables more precisely:
+
+  Nickname    Rob
+  Fullname    ${Nickname}ert
+
+Since only scalars are supported, if you use a multi-value, you will
+only get back the first one:
+
+  Options     Plus Minus "About the Same"
+  Values      $Options
+
+In this examples, "Values" will become "Plus". This is seldom a limitation
+since in most cases, variable subsitution is used like the first example
+shows. This option defaults to 0.
+
+=item setenv_vars
+
+If this is set to 1, then the special C<SetEnv> directive will be set
+values in the environment via C<%ENV>.  Also, the special C<UnSetEnv>
+directive will delete environment variables.
+
+For example:
+
+  # $ENV{PATH} = "/usr/sbin:/usr/bin"
+  SetEnv PATH "/usr/sbin:/usr/bin"
+
+  # $ENV{MY_SPECIAL_VAR} = 10
+  SetEnv MY_SPECIAL_VAR 10
+
+  # delete $ENV{THIS}
+  UnsetEnv THIS
+
+This option defaults to 0.
 
 =item valid_directives
 
@@ -175,43 +224,124 @@ name will be accepted.  For exmaple, to only allow "Directory" and
                       valid_blocks => [qw(Directory Location)],
                                      );
 
+=item include_directives
+
+This directive controls the name of the include directive.  By default
+it is C<< ['Include'] >>, but you can set it to any list of directive
+names.
+
+=item root_directive
+
+This controls what the root directive is, if any.  If you set this to
+the name of a directive it will be used as a base directory for
+C<Include> processing.  This mimics the behavior of C<ServerRoot> in
+real Apache config files, and as such you'll want to set it to
+'ServerRoot' when parsing an Apache config.  The default is C<undef>.
+
+=item hash_directives
+
+This determines which directives (if any) should be parsed so that the
+first value is actually a key into the remaining values. For example,
+C<AddHandler> is such a directive.
+
+  AddHandler cgi-script .cgi .sh
+  AddHandler server-parsed .shtml
+
+To parse this correctly, use:
+
+  $config = Config::ApacheFormat->new(
+                      hash_directives => [qw(AddHandler PerlSetVar)]
+                                     );
+
+Then, use the two-argument form of C<get()>:
+
+  @values = $config->get(AddHandler => 'cgi-script');
+
+This allows you to access each directive individually, which is needed
+to correctly handle certain special-case Apache settings.
+
+=item duplicate_directives
+
+This option controls how duplicate directives are handled. By default,
+if multiple directives of the same name are encountered, the last one
+wins:
+
+  Port 8080
+  # ...
+  Port 5053
+
+In this case, the directive C<Port> would be set to the last value, C<5053>.
+This is useful because it allows you to include other config files, which
+you can then override:
+
+  # default setup
+  Include /my/app/defaults.conf
+
+  # override port
+  Port 5053
+
+In addition to this default behavior, C<Config::ApacheFormat> also supports
+the following modes:
+
+  last     -  the value from the last one is kept (default)
+  error    -  duplicate directives result in an error
+  combine  -  combine values of duplicate directives together
+
+These should be self-explanatory. If set to C<error>, any duplicates
+will result in an error.  If set to C<last> (the default), the last
+value wins. If set to C<combine>, then duplicate directives are
+combined together, just like they had been specified on the same line.
+
 =back
 
-All of these attributes are also available as accessor methods.  Thus,
+All of the above attributes are also available as accessor methods.  Thus,
 this:
 
- $config = Config::ApacheFormat->new(inheritance_support => 0,
-                                     include_support => 1);
+  $config = Config::ApacheFormat->new(inheritance_support => 0,
+                                      include_support => 1);
 
 Is equivalent to:
 
- $config = Config::ApacheFormat->new();
- $config->inheritance_support(0);
- $config->include_support(1);
+  $config = Config::ApacheFormat->new();
+  $config->inheritance_support(0);
+  $config->include_support(1);
 
 =over 4
 
 =cut
 
-use Scalar::Util   qw(weaken);
+use File::Spec;
 use Carp           qw(croak);
-use Text::Balanced qw(extract_delimited);
+use Text::Balanced qw(extract_delimited extract_variable);
+use Scalar::Util qw(weaken);
+
+# this "placeholder" is used to handle escaped variables (\$)
+# if it conflicts with a define in your config file somehow, simply
+# override it with "$Config::ApacheFormat::PLACEHOLDER = 'whatever';"
+our $PLACEHOLDER = "~PLaCE_h0LDeR_$$~";  
 
 # declare generated methods
 use Class::MethodMaker
   new_with_init => "new",
   new_hash_init => "hash_init",
-  get_set => [ -noclear => 
-               "inheritance_support", 
-               "include_support",
-               "autoload_support",
-               "case_sensitive", 
-               "valid_directives",
-               "valid_blocks",
-               "_parent",
-               "_data",
-               "_block_vals",
-             ];
+  get_set => [ -noclear => qw/
+                inheritance_support
+                include_support
+                autoload_support
+                case_sensitive
+                expand_vars
+                setenv_vars
+                valid_directives
+                valid_blocks
+                duplicate_directives
+                hash_directives
+                fix_booleans
+                root_directive
+                include_directives
+                _parent
+                _data
+                _block_vals
+             /];
 
 # setup defaults
 sub init {
@@ -221,24 +351,25 @@ sub init {
                 include_support     => 1,
                 autoload_support    => 0,
                 case_sensitive      => 0,
+                expand_vars         => 0,
+                setenv_vars         => 0,
                 valid_directives    => undef,
                 valid_blocks        => undef,
+                duplicate_directives=> 'last',
+                include_directives  => ['Include'],
+                hash_directives     => undef,
+                fix_booleans        => 0,
+                root_directive      => undef,
                 _data               => {},
                 @_);
 
-    # support my now-fixed spelling error for a while
-    if (exists $args{inheritence_support}) {
-        $args{inheritance_support} = $args{inheritence_support}; 
-        warn("Use of deprecated, wrong spelling of 'inheritance_support' detected in call to Config::ApacheFormat->new().  You should fix this now.  The next version of Apache::ConfigFormat will not support the misspelling.");
-    }
+    # could probably use a few more of these...
+    croak("Invalid duplicate_directives option '$self->{duplicate_directives}' - must be 'last', 'error', or 'combine'")
+      unless $args{duplicate_directives} eq 'last' or 
+             $args{duplicate_directives} eq 'error' or 
+             $args{duplicate_directives} eq 'combine';
 
     return $self->hash_init(%args);
-}
-
-# support my now-fixed spelling error for a while
-sub inheritence_support { 
-    warn("Use of deprecated, wrong spelling of 'inheritance_support' detected in call to Config::ApacheFormat->inheritence_support().  You should fix this now.  The next version of Apache::ConfigFormat will not support the misspelling.");
-    return shift->inheritance_support(@_);
 }
 
 =item $config->read("my.conf");
@@ -291,18 +422,28 @@ sub _read {
     my ($validate_blocks,     %valid_blocks, 
         $validate_directives, %valid_directives);
     if ($self->{valid_directives}) {
-        %valid_directives = map { ($case_sensitive ? lc($_) : $_), 1 } 
+        %valid_directives = map { ($case_sensitive ? $_ : lc($_)), 1 } 
           @{$self->{valid_directives}};
         $validate_directives = 1;
     } 
     if ($self->{valid_blocks}) {
-        %valid_blocks = map { ($case_sensitive ? lc($_) : $_), 1 } 
+        %valid_blocks = map { ($case_sensitive ? $_ : lc($_)), 1 } 
           @{$self->{valid_blocks}};
         $validate_blocks = 1;
     }
 
+    # pre-compute a regex to recognize the include directives
+    my $re = '^(?:' . 
+      join('|', @{$self->{include_directives}}) . ')$';
+    my $include_re;
+    if ($self->{case_sensitive}) {
+        $include_re = qr/$re/;
+    } else {
+        $include_re = qr/$re/i;
+    }
+
     # parse through the file, line by line
-    my ($name, $values, $line);
+    my ($name, $values, $line, $orig);
     my ($fh, $filename) = 
       @{$fstack->[-1]}{qw(fh filename)};
     my $line_num = \$fstack->[-1]{line_num};
@@ -321,6 +462,7 @@ sub _read {
         # accumulate a full line, dealing with line-continuation
         $line = "";
         do {
+            no warnings 'uninitialized';    # blank warnings
             $_ = <$fh>;
             ${$line_num}++;
             s/^\s+//;            # strip leading space
@@ -335,11 +477,11 @@ sub _read {
         # parse line
         if ($line =~ /^<\/(\w+)>$/) {
             # end block            
-            $name = $1;
+            $orig = $name = $1;
             $name = lc $name unless $case_sensitive; # lc($1) breaks on 5.6.1!
 
             croak("Error in config file $filename, line $$line_num: " .
-                  "Unexpected end to block '$name' found." .
+                  "Unexpected end to block '$orig' found" .
                   (defined $block_name ? 
                    "\nI was waiting for </$block_name>\n" : ""))
               unless defined $block_name and $block_name eq $name;
@@ -349,12 +491,12 @@ sub _read {
 
         } elsif ($line =~ /^<(\w+)\s*(.*)>$/) {
             # open block
-            $name   = $1;
+            $orig = $name   = $1;
             $values = $2;
             $name   = lc $name unless $case_sensitive;
 
             croak("Error in config file $filename, line $$line_num: " .
-                  "block '<$name>' is not a valid block name.")
+                  "block '<$orig>' is not a valid block name")
               unless not $validate_blocks or
                      exists $valid_blocks{$name};
             
@@ -372,8 +514,15 @@ sub _read {
                   include_support     => $self->{include_support},
                   autoload_support    => $self->{autoload_support},
                   case_sensitive      => $case_sensitive,
+                  expand_vars         => $self->{expand_vars},
+                  setenv_vars         => $self->{setenv_vars},
                   valid_directives    => $self->{valid_directives},
                   valid_blocks        => $self->{valid_blocks},
+                  duplicate_directives=> $self->{duplicate_directives},
+                  hash_directives     => $self->{hash_directives},
+                  fix_booleans        => $self->{fix_booleans},
+                  root_directive      => $self->{root_directive},
+                  include_directives  => $self->{include_directives},
                   _parent             => $parent,
                   _block_vals         => ref $val ? $val : [ $val ],
                                        );
@@ -387,61 +536,152 @@ sub _read {
 
         } elsif ($line =~ /^(\w+)(?:\s+(.+))?$/) {
             # directive
-            $name = $1;
+            $orig = $name = $1;
             $values = $2;
             $values = 1 unless defined $values;
             $name = lc $name unless $case_sensitive;
 
             croak("Error in config file $filename, line $$line_num: " .
-                  "directive '$name' is not a valid directive name.")
+                  "directive '$name' is not a valid directive name")
               unless not $validate_directives or
                      exists $valid_directives{$name};
 
-            # include processing
-            if ($name =~ /^include$/i) {
-                # try just opening as-is
-                my $include_fh;
-                unless (open($include_fh, "<", $values)) {
-                    if ($fstack->[0]{filename}) {
-                        # try opening it relative to the enclosing file
-                        # using File::Spec
-                        require File::Spec;
-                        my @parts = File::Spec->splitpath($filename);
-                        $parts[-1] = $values;
-                        open($include_fh, "<", File::Spec->catpath(@parts)) or 
-                          croak("Unable to open include file '$values', ".
-                                "in $filename, line $$line_num.");
+            # parse out values, handling any strings or arrays
+            my @val;
+            eval {
+                @val = _parse_value_list($values);
+            };
+            croak("Error in config file $filename, line $$line_num: $@")
+                if $@;
+
+            # expand_vars if set
+            eval {
+                @val = $self->_expand_vars(@val) if $self->{expand_vars};
+            };
+            croak("Error in config file $filename, line $$line_num: $@")
+                if $@;
+
+            # and then setenv too (allowing PATH "$BASEDIR/bin")
+            if ($self->{setenv_vars}) {
+                if ($name =~ /^setenv$/i) {
+                    croak("Error in config file $filename, line $$line_num: ".
+                          " can't use setenv_vars " .
+                          "with malformed SetEnv directive") if @val != 2;
+                    $ENV{"$val[0]"} = $val[1];
+                } elsif ($name =~ /^unsetenv$/i) {
+                    croak("Error in config file $filename, line $$line_num: ".
+                          "can't use setenv_vars " .
+                          "with malformed UnsetEnv directive") unless @val;
+                    delete $ENV{$_} for @val;
+                }
+            }
+
+            # Include processing
+            # because of the way our inheritance works, we navigate multiple files in reverse
+            if ($name =~ /$include_re/) {
+                for my $f (reverse @val) {
+                    # if they specified a root_directive (ServerRoot) and
+                    # it is defined, prefix that to relative paths
+                    my $root = $self->{case_sensitive} ? $self->{root_directive}
+                                                       : lc $self->{root_directive};
+                    if (! File::Spec->file_name_is_absolute($f) && exists $data->{$root}) {
+                        # looks odd; but only reliable method is construct UNIX-style
+                        # then deconstruct
+                        my @parts = File::Spec->splitpath("$data->{$root}[0]/$f");
+                        $f = File::Spec->catpath(@parts);
+                    }
+
+                    # this handles directory includes (i.e. will include all files in a directory)
+                    my @files;
+                    if (-d $f) {
+                        opendir(INCD, $f)
+                            || croak("Cannot open include directory '$f' at $filename ",
+                                     "line $$line_num: $!");
+                        @files = map { "$f/$_" } sort grep { -f "$f/$_" } readdir INCD;
+                        closedir(INCD);
                     } else {
-                        croak("Unable to open include file '$values', ".
-                              "in $filename, line $$line_num.");
+                        @files = $f;
+                    }
+
+                    for my $values (reverse @files) {
+                        # just try to open it as-is
+                        my $include_fh;
+                        unless (open($include_fh, "<", $values)) {
+                            if ($fstack->[0]{filename}) {
+                                # try opening it relative to the enclosing file
+                                # using File::Spec
+                                my @parts = File::Spec->splitpath($filename);
+                                $parts[-1] = $values;
+                                open($include_fh, "<", File::Spec->catpath(@parts)) or 
+                                    croak("Unable to open include file '$values' ",
+                                        "at $filename line $$line_num: $!");
+                                } else {
+                                    croak("Unable to open include file '$values' ",
+                                        "at $filename line $$line_num: $!");
+                                }
+                            }
+
+                        # push a new record onto the @fstack for this file
+                        push(@$fstack, { fh          => $fh        = $include_fh,
+                                         filename    => $filename  = $values,
+                                         line_number => 0 });
+
+                        # hook up line counter
+                        $line_num = \$fstack->[-1]{line_num};
                     }
                 }
-
-                # push a new record onto the @fstack for this file
-                push(@$fstack, { fh          => $fh        = $include_fh,
-                                 filename    => $filename  = $values,
-                                 line_number => 0 });
-
-                # hook up line counter
-                $line_num = \$fstack->[-1]{line_num};
-                
                 next LINE;
             }
 
-            if ($values !~ /['"\s]/) {
-                # handle the common case of a single unquoted string
-                 $data->{$name} = $values;
-            } elsif ($values !~ /['"]/) {
-                # strings without any quote characters can be parsed with split
-                $data->{$name} = [ split /\s+/, $values ]
-            } else {
-                # parse out values the hard way
-                eval {
-                    $data->{$name} = _parse_value_list($values);
-                };
-                croak("Error in config file $filename, line $$line_num: $@")
-                  if $@;
+            # for each @val, "fix" booleans if so requested
+            # do this *after* include processing so "include yes.conf" works
+            if ($self->{fix_booleans}) {
+                for (@val) { 
+                    if (/^true$/i or /^on$/i or /^yes$/i) {
+                        $_ = 1;
+                    } elsif (/^false$/i or /^off$/i or /^no$/i) {
+                        $_ = 0;
+                    }
+                }
             }
+
+            # how to handle repeated values
+            # this is complicated because we have to allow a semi-union of
+            # the hash_directives and duplicate_directives options
+
+            if ($self->{hash_directives}
+                && _member($orig, 
+                           $self->{hash_directives}, $self->{case_sensitive})){
+                my $k = shift @val;
+                if ($self->{duplicate_directives} eq 'error') {
+                    # must check for a *specific* dup
+                    croak "Duplicate directive '$orig $k' at $filename line $$line_num"
+                        if $data->{$name}{$k};
+                    push @{$data->{$name}{$k}}, @val;
+                }
+                elsif ($self->{duplicate_directives} eq 'last') {
+                    $data->{$name}{$k} = \@val;
+                }
+                else {
+                    # push onto our struct to allow repeated declarations
+                    push @{$data->{$name}{$k}}, @val;
+                }
+            } else {
+                if ($self->{duplicate_directives} eq 'error') {
+                    # not a hash_directive, so all dups are errors
+                    croak "Duplicate directive '$orig' at $filename line $$line_num"
+                        if $data->{$name};
+                    push @{$data->{$name}}, @val;
+                }
+                elsif ($self->{duplicate_directives} eq 'last') {
+                    $data->{$name} = \@val;
+                }
+                else {
+                    # push onto our struct to allow repeated declarations
+                    push @{$data->{$name}}, @val;
+                }
+            }
+
         } else {
             croak("Error in config file $filename, line $$line_num: ".
                   "unable to parse line");
@@ -456,44 +696,83 @@ sub _read {
 sub _parse_value_list {
     my $values = shift;
 
-    # break apart line, allowing for quoted strings with
-    # escaping
     my @val;
-    while($values) {
-        my $val;        
-        if ($values !~ /^["']/) {
-            # strip off a value and put it where it belongs
-            ($val, $values) = $values =~ /^(\S+)\s*(.*)$/;
-        } else {
-            # starts with a quote, bring in the big guns
-            $val = extract_delimited($values, q{"'});
-            die("value string not properly formatted.\n")
-              unless length $val;
+    if ($values !~ /['"\s]/) {
+        # handle the common case of a single unquoted string
+        @val = ($values);
+    } elsif ($values !~ /['"]/) {
+        # strings without any quote characters can be parsed with split
+        @val = split /\s+/, $values;
+    } else {
+        # break apart line, allowing for quoted strings with
+        # escaping
+        while($values) {
+            my $val;        
+            if ($values !~ /^["']/) {
+                # strip off a value and put it where it belongs
+                ($val, $values) = $values =~ /^(\S+)\s*(.*)$/;
+            } else {
+                # starts with a quote, bring in the big guns
+                $val = extract_delimited($values, q{"'});
+                die "value string '$values' not properly formatted\n"
+                    unless length $val;
             
-            # remove quotes and fixup escaped characters
-            $val = substr($val, 1, length($val) - 2);
-            $val =~ s/\\'/'/g;
-            $val =~ s/\\"/"/g;
+                # remove quotes and fixup escaped characters
+                $val = substr($val, 1, length($val) - 2);
+                $val =~ s/\\(['"])/$1/g;
 
-            # strip off any leftover space
-            $values =~ s/^\s*//;
+                # strip off any leftover space
+                $values =~ s/^\s*//;
+            }
+            push(@val, $val);
         }
-        push(@val, $val);
     }
-    die("no value found for directive.\n")
-      unless @val;
+    die "no value found for directive\n" unless @val;
 
-    return @val == 1 ? $val[0] : \@val;
+    return wantarray ? @val : \@val;
 }
 
+# expand any $var stuff if expand_vars is set
+sub _expand_vars {
+    my $self = shift;
+    my @vals = @_;
+    for (@vals) {
+        local $^W = 0;            # shuddup uninit
+        s/\\\$/$PLACEHOLDER/g;    # kludge but works (Text::Balanced broken)
+        s/\$\{?(\w+)\}?/
+            my $var = $1;
+            my $val = $self->get($var);
+            die "undefined variable '\$$var' seen\n" unless defined $val;
+            $val; 
+        /ge;
+        s/$PLACEHOLDER/\$/g;      # redo placeholders, removing escaping
+    }
+    return @vals;
+}
 
-=item $value = $config->get("var_name")
+sub _member {
+    # simple "in" style sub
+    my($name, $hdir, $case) = @_;
+    $name = lc $name unless $case;
+    return unless $hdir && ref $hdir eq 'ARRAY';
+    for (@$hdir) {
+        $_ = lc $_ unless $case;
+        return 1 if $name eq $_;
+    }
+    return;
+}
 
-Returns a value from the configuration file.  If the directive
-contains a single value, it will be returned.  If the directive
-contains a list of values then they will be returned as a list.  If
-the directive does not exist in the configuration file then nothing
-will be returned (undef in scalar context, empty list in list context).
+=item C<< $value = $config->get("var_name") >>
+
+=item C<< @vals = $config->get("list_name") >>
+
+=item C<< $value = $config->get("hash_var_name", "key") >>
+
+Returns values from the configuration file.  If the directive contains
+a single value, it will be returned.  If the directive contains a list
+of values then they will be returned as a list.  If the directive does
+not exist in the configuration file then nothing will be returned
+(undef in scalar context, empty list in list context).
 
 For example, given this confiuration file:
 
@@ -530,11 +809,18 @@ If the directive was included in the file but did not have a value,
 Calling get() with no arguments will return the names of all available
 directives.
 
+Directives declared in C<hash_directives> require a key value:
+
+  $handler = $config->get("AddHandler", "cgi-script");
+
+C<directive()> is available as an alias for C<get()>.
+
 =cut
 
 # get a value from the config file.
+*directive = \&get;
 sub get {
-    my ($self, $name) = @_;
+    my ($self, $name, $srch) = @_;
 
     # handle empty param call
     return keys %{$self->{_data}} if @_ == 1;
@@ -561,13 +847,27 @@ sub get {
     
     # for blocks, return a list of valid block identifiers
     my $type = ref $val;
-    if ($type and $type eq 'ARRAY' and 
-        ref($val->[0]) eq ref($self)) {
-        return map { [ $name, @{$_->{_block_vals}} ] } @$val;
+    my @ret;    # tmp to avoid screwing up $val
+    if ($type) {
+        if ($type eq 'ARRAY' and 
+            ref($val->[0]) eq ref($self)) {
+            @ret = map { [ $name, @{$_->{_block_vals}} ] } @$val;
+            $val = \@ret;
+        } elsif ($type eq 'HASH') {
+            # hash_directive
+            if ($srch) {
+                # return the specific one
+                $val = $val->{$srch};
+            } else {
+                # return valid keys
+                $val = [ keys %$val ];
+            }
+            
+        }
     }
-    
-    # normal directives are either lists or single values
-    return $type ? @$val : $val;
+ 
+    # return all vals in list ctxt, or just the first in scalar
+    return wantarray ? @$val : $val->[0];
 }
 
 =item $block = $config->block("BlockName")
@@ -622,31 +922,38 @@ passed in.
 
 # get object for a given block specifier
 sub block {
-    my ($self, $name, @vals) = @_;
+    my $self = shift;
+    my($name, @vals) = ref $_[0] eq 'ARRAY' ? @{$_[0]} : @_;
     $name = lc $name unless $self->{case_sensitive};
-    my $data = $self->_data;
+    my $data = $self->{_data};
 
     # make sure we have at least one block named $name
     my $block_array;
-    croak("No such block named '$name' in config file.")
+    croak("No such block named '$name' in config file")
       unless ($block_array = $data->{$name} and 
               ref($block_array) eq 'ARRAY' and
               ref($block_array->[0]) eq ref($self));
 
     # find a block matching @vals.  If Perl supported arbitrary
     # structures as hash keys this could be more efficient.
+    my @ret;
   BLOCK: 
     foreach my $block (@{$block_array}) {
         if (@vals == @{$block->{_block_vals}}) {
             for (local $_ = 0; $_ < @vals; $_++) {
                 next BLOCK unless $vals[$_] eq $block->{_block_vals}[$_];
             }
-            return $block;
+            return $block unless wantarray;     # saves time
+            push @ret, $block;
         }
     }
+    return @ret if @ret;
+
+    # redispatch to get() if just given block type ($config->block('location'))
+    #return $self->get(@_) unless @vals;
 
     croak("No such block named '$name' with values ", 
-          join(', ', map { "'$_'" } @vals), " in config file.");
+          join(', ', map { "'$_'" } @vals), " in config file");
 }   
 
 =item $config->clear()
@@ -662,10 +969,35 @@ sub clear {
     $self->{_data} = {};
 }
 
+=item $config->dump()
+
+This returns a dumped copy of the current configuration. It can be
+used on a block object as well. Since it returns a string, you should
+say:
+
+    print $config->dump;
+
+Or:
+
+    for ($config->block(VirtualHost => '10.1.65.1')) {
+        print $_->dump;
+    }
+
+If you want to see any output.
+
+=cut
+
+sub dump {
+    my $self = shift;
+    require Data::Dumper;
+    $Data::Dumper::Indent = 1;
+    return Data::Dumper::Dumper($self);
+}
+
 # handle autoload_support feature
+sub DESTROY { 1 }
 sub AUTOLOAD {
     our $AUTOLOAD;
-    return if $AUTOLOAD =~ /DESTROY$/;
 
     my $self = shift;
     my ($name) = $AUTOLOAD =~ /([^:]+)$/;
@@ -681,6 +1013,22 @@ sub AUTOLOAD {
 __END__
 
 =back
+
+=head1 Parsing a Real Apache Config File
+
+To parse a real Apache config file (ex. C<httpd.conf>) you'll need to
+use some non-default options.  Here's a reasonable starting point:
+
+  $config = Config::ApacheFormat->new(
+              root_directive     => 'ServerRoot',
+              hash_directives    => [ 'AddHandler' ],
+              include_directives => [ 'Include', 
+                                      'AccessConfig', 
+                                      'ResourceConfig' ],
+              setenv_vars        => 1,
+              fix_booleans       => 1);
+
+              
 
 =head1 TODO
 
@@ -710,14 +1058,20 @@ code that I can run which demonstrates the problem.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2002 Sam Tregar
+Copyright (C) 2002-2003 Sam Tregar
 
 This program is free software; you can redistribute it and/or modify
 it under the same terms as Perl 5 itself.
 
-=head1 AUTHOR
+=head1 AUTHORS
 
-Sam Tregar <sam@tregar.com>
+=item Sam Tregar <sam@tregar.com>
+
+Original author and maintainer
+
+=item Nathan Wiger <nate@wiger.org>
+
+Porting of features from L<Apache::ConfigFile|Apache::ConfigFile>
 
 =head1 SEE ALSO
 
@@ -726,3 +1080,4 @@ L<Apache::ConfigFile|Apache::ConfigFile>
 L<Apache::ConfigParser|Apache::ConfigParser>
 
 =cut
+

@@ -1,4 +1,5 @@
-use Test::More qw(no_plan);
+
+use Test::More tests => 8;
 BEGIN { use_ok('Config::ApacheFormat'); }
 
 my $config = Config::ApacheFormat->new();

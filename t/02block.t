@@ -1,5 +1,7 @@
-use Test::More qw(no_plan);
-use Config::ApacheFormat;
+
+use Test::More tests => 17;
+
+BEGIN { use_ok 'Config::ApacheFormat'; }
 
 my $config = Config::ApacheFormat->new();
 $config->read("t/block.conf");
@@ -15,10 +17,10 @@ is($block->get("foo"), "bar");
 is(($block->get("baz"))[0], "Bif");
 is(($block->get("baz"))[1], "Bap");
 
-$block = $config->block(Param => foo);
+$block = $config->block(Param => 'foo');
 is($block->get("fooz"), "Bat");
 
-$block = $config->block(Param => bar);
+$block = $config->block(Param => 'bar');
 is($block->get("fooz"), "Batty");
 
 is($block->get("global"), 1, "inheritence works");
