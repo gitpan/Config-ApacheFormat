@@ -35,3 +35,5 @@ foreach my $b (@blocks) {
     isa_ok($block, ref($config));
 }
 
+$block = $config->block(qw(Multi a b c));
+is($block->get("foo"), "bar");

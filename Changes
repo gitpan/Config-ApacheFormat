@@ -1,4 +1,25 @@
 Revision history for Config::ApacheFormat
 
 1.0  Sun Nov 24 12:58:35 2002
-        - First version.
+    - First version.
+
+1.1  Tue Nov 26 12:00:00 2002
+    - Added new options 'valid_directives' and 'valid_blocks' to allow
+      the parser to produce syntax errors on invalid data.  Thanks to
+      Rudy Lippan for the suggestion.
+
+    - Added filenames to error messages and added code to track
+      filenames and line numbers correctly across included files.
+
+    - Fixed bug where blocks with multi-part names couldn't be
+      accessed with block().
+
+    - Fixed spelling error in API.  The wrong spelling of
+      "inheritance" as "inheritence" is now deprecated.
+
+    - Modified get() to avoid recursion when inheritance_support is
+      on for a small speedup.
+
+    - Optimized parsing for a 50% speedup on large files.
+
+    - Lowered memory usage.

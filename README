@@ -1,10 +1,26 @@
-Config::ApacheFormat 1.0
+Config::ApacheFormat 1.1
 ========================
 
 CHANGES
 
-  1.0  Sun Nov 24 12:58:35 2002
-        - First version.
+ 1.1  Tue Nov 26 12:00:00 2002
+    - Added new options 'valid_directives' and 'valid_blocks' to allow
+      the parser to produce syntax errors on invalid data.  Thanks to
+      Rudy Lippan for the suggestion.
+
+    - Fixed bug where blocks with multi-part names couldn't be
+      accessed with block().
+
+    - Fixed spelling error in API.  The wrong spelling of
+      "inheritance" as "inheritence" is now deprecated.
+
+    - Modified get() to avoid recursion when inheritance_support is
+      on for a small speedup.
+
+    - Optimized parsing for a 50% speedup on large files.
+
+    - Lowered memory usage.
+
 
 INSTALLATION
 
@@ -31,7 +47,7 @@ DESCRIPTION
     used by the Apache web server (see http://httpd.apache.org for details).
     This allows you to build applications which can be easily managed by
     experienced Apache admins. Also, by using this module, you'll benefit
-    from the support for nested blocks with built-in parameter inheritence.
+    from the support for nested blocks with built-in parameter inheritance.
     This can greatly reduce the amount or repeated information in your
     configuration files.
 
@@ -81,7 +97,7 @@ RATIONALE
     format. Unlike Apache::ConfigFile, Apache::ConfigParser lacks support
     for Include.
 
-    Additionally, neither module supports directive inheritence within
+    Additionally, neither module supports directive inheritance within
     blocks. As this is the main benefit of Apache's block syntax I decided I
     couldn't live without it.
 

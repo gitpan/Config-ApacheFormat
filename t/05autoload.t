@@ -14,4 +14,4 @@ my @bopbop = $config->bopbop;
 is($bopbop[1], 'hello "world"');
 is($bopbop[3], 'to');
 
-is($config->get(), 3);
+is($config->get(), 4);

@@ -2,7 +2,7 @@ package Config::ApacheFormat;
 use 5.006001;
 use strict;
 use warnings;
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 
 =head1 NAME
 
@@ -53,7 +53,7 @@ syntax used by the Apache web server (see http://httpd.apache.org for
 details).  This allows you to build applications which can be easily
 managed by experienced Apache admins.  Also, by using this module,
 you'll benefit from the support for nested blocks with built-in
-parameter inheritence.  This can greatly reduce the amount or repeated
+parameter inheritance.  This can greatly reduce the amount or repeated
 information in your configuration files.
 
 A good reference to the Apache configuration file format can be found
@@ -103,7 +103,7 @@ unsuitable to parsing an application configuration file in Apache
 format.  Unlike Apache::ConfigFile, Apache::ConfigParser lacks support
 for Include.
 
-Additionally, neither module supports directive inheritence within
+Additionally, neither module supports directive inheritance within
 blocks.  As this is the main benefit of Apache's block syntax I
 decided I couldn't live without it.  
 
@@ -121,9 +121,9 @@ following attributes, all of which may be set through new():
 
 =over 4
 
-=item inheritence_support
+=item inheritance_support
 
-Set this to 0 to turn off the inheritence feature, Block inheritence
+Set this to 0 to turn off the inheritance feature, Block inheritance
 means that variables declared outside a block are available from
 inside the block unless overriden.  Defaults to 1.
 
@@ -153,18 +153,40 @@ Defaults to 0.
 Set this to 1 to preserve the case of directive names.  Otherwise, all
 names will be lc()ed and matched case-insensitively.  Defaults to 0.
 
+=item valid_directives
+
+If you provide an array of directive names then syntax errors will be
+generated during parsing for invalid directives.  Otherwise, any
+directive name will be accepted.  For exmaple, to only allow
+directives called "Bar" and "Bif":
+
+  $config = Config::ApacheFormat->new(
+                      valid_directives => [qw(Bar Bif)],
+                                     );
+
+=item valid_blocks
+
+If you provide an array of block names then syntax errors will be
+generated during parsing for invalid blocks.  Otherwise, any block
+name will be accepted.  For exmaple, to only allow "Directory" and
+"Location" blocks in your config file:
+
+  $config = Config::ApacheFormat->new(
+                      valid_blocks => [qw(Directory Location)],
+                                     );
+
 =back
 
 All of these attributes are also available as accessor methods.  Thus,
 this:
 
- $config = Config::ApacheFormat->new(inheritence_support => 0,
+ $config = Config::ApacheFormat->new(inheritance_support => 0,
                                      include_support => 1);
 
 Is equivalent to:
 
  $config = Config::ApacheFormat->new();
- $config->inheritence_support(0);
+ $config->inheritance_support(0);
  $config->include_support(1);
 
 =over 4
@@ -180,10 +202,12 @@ use Class::MethodMaker
   new_with_init => "new",
   new_hash_init => "hash_init",
   get_set => [ -noclear => 
-               "inheritence_support", 
+               "inheritance_support", 
                "include_support",
                "autoload_support",
                "case_sensitive", 
+               "valid_directives",
+               "valid_blocks",
                "_parent",
                "_data",
                "_block_vals",
@@ -193,13 +217,28 @@ use Class::MethodMaker
 sub init {
     my $self = shift;
     my %args = (
-                inheritence_support => 1,
+                inheritance_support => 1,
                 include_support     => 1,
                 autoload_support    => 0,
                 case_sensitive      => 0,
+                valid_directives    => undef,
+                valid_blocks        => undef,
                 _data               => {},
                 @_);
+
+    # support my now-fixed spelling error for a while
+    if (exists $args{inheritence_support}) {
+        $args{inheritance_support} = $args{inheritence_support}; 
+        warn("Use of deprecated, wrong spelling of 'inheritance_support' detected in call to Config::ApacheFormat->new().  You should fix this now.  The next version of Apache::ConfigFormat will not support the misspelling.");
+    }
+
     return $self->hash_init(%args);
+}
+
+# support my now-fixed spelling error for a while
+sub inheritence_support { 
+    warn("Use of deprecated, wrong spelling of 'inheritance_support' detected in call to Config::ApacheFormat->inheritence_support().  You should fix this now.  The next version of Apache::ConfigFormat will not support the misspelling.");
+    return shift->inheritance_support(@_);
 }
 
 =item $config->read("my.conf");
@@ -221,44 +260,74 @@ first if you want to read a new set from scratch.
 sub read {
     my ($self, $file) = @_;
 
-    # open the file if needed 
+    my @fstack;
+
+    # open the file if needed and setup file stack
     my $fh;
     if (ref $file) {
-        $fh = $file;
+        @fstack = { fh       => $file,
+                    filename => "",
+                    line_num => 0 };                     
     } else {
         open($fh, "<", $file) or croak("Unable to open file '$file': $!");
+        @fstack = { fh       => $fh,
+                    filename => $file,
+                    line_num => 0 };
     }
-
-    # read in data
-    my @lines = <$fh>;
     
-    return $self->_read($file, \@lines);
+    return $self->_read(\@fstack);
 }
 
 # underlying _read, called recursively an block name for
 # nested block objects
 sub _read {
-    my ($self, $file, $lines, $block_name) = @_;
+    my ($self, $fstack, $block_name) = @_;
 
     # pre-fetch for loop
     my $case_sensitive = $self->{case_sensitive};
     my $data           = $self->{_data};
 
+    # pre-compute lookups for validation lists, if they exists
+    my ($validate_blocks,     %valid_blocks, 
+        $validate_directives, %valid_directives);
+    if ($self->{valid_directives}) {
+        %valid_directives = map { ($case_sensitive ? lc($_) : $_), 1 } 
+          @{$self->{valid_directives}};
+        $validate_directives = 1;
+    } 
+    if ($self->{valid_blocks}) {
+        %valid_blocks = map { ($case_sensitive ? lc($_) : $_), 1 } 
+          @{$self->{valid_blocks}};
+        $validate_blocks = 1;
+    }
+
     # parse through the file, line by line
-    my $line_num = 0;
     my ($name, $values, $line);
+    my ($fh, $filename) = 
+      @{$fstack->[-1]}{qw(fh filename)};
+    my $line_num = \$fstack->[-1]{line_num};
+
   LINE: 
-    while(@$lines) {
+    while(1) {
+        # done with current file?
+        if (eof $fh) {
+            last LINE if @$fstack == 1;
+            pop @$fstack;
+            ($fh, $filename) = 
+              @{$fstack->[-1]}{qw(fh filename)};
+            $line_num = \$fstack->[-1]{line_num};
+        }
+
         # accumulate a full line, dealing with line-continuation
         $line = "";
         do {
-            $_ = shift @$lines;
-            $line_num++;
+            $_ = <$fh>;
+            ${$line_num}++;
             s/^\s+//;            # strip leading space
             next LINE if /^#/;   # skip comments
             s/\s+$//;            # strip trailing space            
             $line .= $_;
-        } while ($line =~ s/\\$// and @$lines);
+        } while ($line =~ s/\\$// and not eof($fh));
         
         # skip blank lines
         next LINE unless length $line;
@@ -269,7 +338,7 @@ sub _read {
             $name = $1;
             $name = lc $name unless $case_sensitive; # lc($1) breaks on 5.6.1!
 
-            croak("Syntax error at line $line_num: " .
+            croak("Error in config file $filename, line $$line_num: " .
                   "Unexpected end to block '$name' found." .
                   (defined $block_name ? 
                    "\nI was waiting for </$block_name>\n" : ""))
@@ -284,8 +353,13 @@ sub _read {
             $values = $2;
             $name   = lc $name unless $case_sensitive;
 
-            my @vals;
-            @vals = _parse_value_list($values) if $values;
+            croak("Error in config file $filename, line $$line_num: " .
+                  "block '<$name>' is not a valid block name.")
+              unless not $validate_blocks or
+                     exists $valid_blocks{$name};
+            
+            my $val = [];
+            $val = _parse_value_list($values) if $values;
 
             # create new object for block, inheriting options from
             # this object, with this object set as parent (using
@@ -294,64 +368,83 @@ sub _read {
             my $parent = $self;
             weaken($parent);
             my $block = ref($self)->new(
-                  inheritence_support => $self->{inheritence_support},
+                  inheritance_support => $self->{inheritance_support},
                   include_support     => $self->{include_support},
                   autoload_support    => $self->{autoload_support},
                   case_sensitive      => $case_sensitive,
+                  valid_directives    => $self->{valid_directives},
+                  valid_blocks        => $self->{valid_blocks},
                   _parent             => $parent,
-                  _block_vals         => \@vals,
+                  _block_vals         => ref $val ? $val : [ $val ],
                                        );
             
             # tell the block to read from $fh up to the closing tag
             # for this block
-            $block->_read($file, $lines, $name);
+            $block->_read($fstack, $name);
 
             # store block for get() and block()
             push @{$data->{$name}}, $block;
 
-        } elsif ($line =~ /^(\w+)\s+(.+)$/) {
+        } elsif ($line =~ /^(\w+)(?:\s+(.+))?$/) {
             # directive
             $name = $1;
             $values = $2;
+            $values = 1 unless defined $values;
             $name = lc $name unless $case_sensitive;
+
+            croak("Error in config file $filename, line $$line_num: " .
+                  "directive '$name' is not a valid directive name.")
+              unless not $validate_directives or
+                     exists $valid_directives{$name};
 
             # include processing
             if ($name =~ /^include$/i) {
                 # try just opening as-is
-                if (open(my $include_fh, "<", $values)) {
-                    unshift(@$lines, <$include_fh>);
-                } elsif (not ref $file) {
-                    # try opening it relative to the enclosing file
-                    # using File::Spec
-                    require File::Spec;
-                    my @parts = File::Spec->splitpath($file);
-                    $parts[-1] = $values;
-                    open($include_fh, "<", File::Spec->catpath(@parts)) or 
-                      croak("Unable to open include file '$values', ".
-                            "found on line $line_num.");
-                    unshift(@$lines, <$include_fh>);
-                } else {
-                    croak("Unable to open include file '$values', ".
-                          "found on line $line_num.");
+                my $include_fh;
+                unless (open($include_fh, "<", $values)) {
+                    if ($fstack->[0]{filename}) {
+                        # try opening it relative to the enclosing file
+                        # using File::Spec
+                        require File::Spec;
+                        my @parts = File::Spec->splitpath($filename);
+                        $parts[-1] = $values;
+                        open($include_fh, "<", File::Spec->catpath(@parts)) or 
+                          croak("Unable to open include file '$values', ".
+                                "in $filename, line $$line_num.");
+                    } else {
+                        croak("Unable to open include file '$values', ".
+                              "in $filename, line $$line_num.");
+                    }
                 }
+
+                # push a new record onto the @fstack for this file
+                push(@$fstack, { fh          => $fh        = $include_fh,
+                                 filename    => $filename  = $values,
+                                 line_number => 0 });
+
+                # hook up line counter
+                $line_num = \$fstack->[-1]{line_num};
                 
                 next LINE;
             }
 
-            if ($values =~ /^\w+$/) {
-                # handle the common case of a single unquoted scalar
-                # value fast
-                $data->{$name} = $values;
+            if ($values !~ /['"\s]/) {
+                # handle the common case of a single unquoted string
+                 $data->{$name} = $values;
+            } elsif ($values !~ /['"]/) {
+                # strings without any quote characters can be parsed with split
+                $data->{$name} = [ split /\s+/, $values ]
             } else {
-                # parse out values
+                # parse out values the hard way
                 eval {
                     $data->{$name} = _parse_value_list($values);
                 };
-                croak("Syntax error on line $line_num parsing '$name': $@")
+                croak("Error in config file $filename, line $$line_num: $@")
                   if $@;
             }
         } else {
-            croak("Syntax error on line $line_num: unable to parse line.");
+            croak("Error in config file $filename, line $$line_num: ".
+                  "unable to parse line");
         }
     }
 
@@ -362,21 +455,28 @@ sub _read {
 # and otherwise splitting on whitespace
 sub _parse_value_list {
     my $values = shift;
+
     # break apart line, allowing for quoted strings with
     # escaping
     my @val;
-    while($values =~ /\S/) {
-        my $val;
-        if ($values =~ /^\s*["']/) {
+    while($values) {
+        my $val;        
+        if ($values !~ /^["']/) {
+            # strip off a value and put it where it belongs
+            ($val, $values) = $values =~ /^(\S+)\s*(.*)$/;
+        } else {
+            # starts with a quote, bring in the big guns
             $val = extract_delimited($values, q{"'});
             die("value string not properly formatted.\n")
               unless length $val;
             
             # remove quotes and fixup escaped characters
             $val = substr($val, 1, length($val) - 2);
-            $val =~ s/\\(.)/$1/g;
-        } else {
-            ($val, $values) = $values =~ /^\s*(\S+)\s*(.*)$/;
+            $val =~ s/\\'/'/g;
+            $val =~ s/\\"/"/g;
+
+            # strip off any leftover space
+            $values =~ s/^\s*//;
         }
         push(@val, $val);
     }
@@ -424,25 +524,40 @@ This call:
 Will return C<([ Site => "big"], [ Site => "small" ])>.  These arrays
 can then be used with the block() method described below.
 
+If the directive was included in the file but did not have a value,
+1 is returned by get().
+
 Calling get() with no arguments will return the names of all available
 directives.
 
 =cut
 
-# get a value from the config file.  Called recursively for nested
-# blocks.
+# get a value from the config file.
 sub get {
     my ($self, $name) = @_;
+
+    # handle empty param call
     return keys %{$self->{_data}} if @_ == 1;
+
+    # lookup name in _data
     $name = lc $name unless $self->{case_sensitive};
     my $val = $self->{_data}{$name};
-    if (not defined $val) {
-        if ($self->{_parent} and $self->{inheritence_support}) {
-            $val = $self->{_parent}->get($name);
-        } else {
-            return;
-        }
+
+    # Search through up the tree if inheritence is on and we have a
+    # parent.  Simulated recursion terminates either when $val is
+    # found or when the root is reached and _parent is undef.
+    if (not defined $val and 
+        $self->{_parent} and 
+        $self->{inheritance_support}) {
+        my $ptr = $self;
+        do {
+            $ptr = $ptr->{_parent};
+            $val = $ptr->{_data}{$name};
+        } while (not defined $val and $ptr->{_parent});
     }
+
+    # didn't find it?
+    return unless defined $val;
     
     # for blocks, return a list of valid block identifiers
     my $type = ref $val;
@@ -463,7 +578,7 @@ sub get {
 
 This method returns a Config::ApacheFormat object used to access the
 values inside a block.  Parameters specified within the block will be
-available.  Also, if inheritence is turned on (the default), values
+available.  Also, if inheritance is turned on (the default), values
 set outside the block that are not overwritten inside the block will
 also be available.  For example, given this file:
 
@@ -541,7 +656,11 @@ $config->read() for a fresh read.
 
 =cut
 
-sub clear { shift->_data({}); }
+sub clear {
+    my $self = shift;
+    delete $self->{_data};
+    $self->{_data} = {};
+}
 
 # handle autoload_support feature
 sub AUTOLOAD {
@@ -568,10 +687,6 @@ __END__
 Some possible ideas for future development:
 
 =over 4
-
-=item *
-
-Unroll the recursion in get() for faster access to inherited values.
 
 =item *
 
