@@ -1,0 +1,97 @@
+Config::ApacheFormat 1.0
+========================
+
+CHANGES
+
+  1.0  Sun Nov 24 12:58:35 2002
+        - First version.
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+DEPENDENCIES
+
+This module requires these other modules and libraries:
+
+   Carp
+   Scalar::Util       1.07
+   Class::MethodMaker 1.08
+   Text::Balanced     1.89
+   File::Spec         0.82
+
+DESCRIPTION
+
+    This module is designed to parse a configuration file in the same syntax
+    used by the Apache web server (see http://httpd.apache.org for details).
+    This allows you to build applications which can be easily managed by
+    experienced Apache admins. Also, by using this module, you'll benefit
+    from the support for nested blocks with built-in parameter inheritence.
+    This can greatly reduce the amount or repeated information in your
+    configuration files.
+
+    A good reference to the Apache configuration file format can be found
+    here:
+
+      http://httpd.apache.org/docs-2.0/configuring.html
+
+    To quote from that document, concerning directive syntax:
+
+     Apache configuration files contain one directive per line. The
+     back-slash "\" may be used as the last character on a line to
+     indicate that the directive continues onto the next line. There must
+     be no other characters or white space between the back-slash and the
+     end of the line.
+
+     Directives in the configuration files are case-insensitive, but
+     arguments to directives are often case sensitive. Lines that begin
+     with the hash character "#" are considered comments, and are
+     ignored. Comments may not be included on a line after a configuration
+     directive. Blank lines and white space occurring before a directive
+     are ignored, so you may indent directives for clarity.
+
+    And block notation:
+
+     Directives placed in the main configuration files apply to the entire
+     server. If you wish to change the configuration for only a part of the
+     server, you can scope your directives by placing them in <Directory>,
+     <DirectoryMatch>, <Files>, <FilesMatch>, <Location>, and
+     <LocationMatch> sections. These sections limit the application of the
+     directives which they enclose to particular filesystem locations or
+     URLs. They can also be nested, allowing for very fine grained
+     configuration.
+
+RATIONALE
+
+    There are at least two other modules on CPAN that perform a similar
+    function to this one, Apache::ConfigFile and Apache::ConfigParser.
+    Although both are close to what I need, neither is totally satisfactory.
+
+    Apache::ConfigFile suffers from a complete lack of tests and a rather
+    clumsy API. Also, it doesn't support quoted strings correctly.
+
+    Apache::ConfigParser comes closer to my needs, but contains code
+    specific to parsing actual Apache configuration files. As such it is
+    unsuitable to parsing an application configuration file in Apache
+    format. Unlike Apache::ConfigFile, Apache::ConfigParser lacks support
+    for Include.
+
+    Additionally, neither module supports directive inheritence within
+    blocks. As this is the main benefit of Apache's block syntax I decided I
+    couldn't live without it.
+
+    In general, I see no problem with reinventing the wheel as long as
+    you're sure your version will really be better. I believe this is, at
+    least for my purposes.
+
+COPYRIGHT AND LICENSE
+
+    Copyright (C) 2002 Sam Tregar
+
+    This program is free software; you can redistribute it and/or modify
+    it under the same terms as Perl 5 itself.
